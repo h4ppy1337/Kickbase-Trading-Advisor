@@ -274,6 +274,33 @@ def build_manager_value_forecast(
             if player.get("lo", 0) > 0
         ]
 
+                print(
+            f"GOALKEEPER CHECK {manager_name}:",
+            [
+                (
+                    player.get("pn"),
+                    player.get("lo"),
+                    player.get("pos")
+                )
+                for player in squad_players
+                if player.get("pos") == 1
+            ]
+        )
+
+        print(
+            f"NON-POSITIVE LO {manager_name}:",
+            [
+                (
+                    player.get("pn"),
+                    player.get("lo"),
+                    player.get("pos")
+                )
+                for player in squad_players
+                if player.get("lo") is None
+                or player.get("lo") <= 0
+            ]
+        )
+
         print(
             f"LINEUP CHECK {manager_name}: "
             f"{len(lineup_by_lo)}/{len(squad_players)} players with lo > 0"
