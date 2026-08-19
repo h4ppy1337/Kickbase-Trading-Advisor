@@ -233,7 +233,9 @@ manager_value_forecast_df = build_manager_value_forecast(
     league_id,
     manager_budgets_df,
     player_matchday_forecast_df,
-    future_login_bonus
+    future_login_bonus,
+    market_updates_until_matchday,
+    market_decay_factor
 )
 
 
@@ -247,13 +249,6 @@ print(
 
 display(manager_value_forecast_df)
 
-
-print("\n=== MANAGER VALUE FORECAST ===")
-print(
-    f"Stichtag: Spieltag {next_matchday['day']} - "
-    f"{next_matchday_start.strftime('%d.%m.%Y %H:%M')}"
-)
-display(manager_value_forecast_df)
 
 # Join with current available players on the market
 market_recommendations_df = join_current_market(token, league_id, live_predictions_df)
