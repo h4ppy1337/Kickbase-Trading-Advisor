@@ -274,7 +274,7 @@ def build_manager_value_forecast(
             if player.get("lo", 0) > 0
         ]
 
-                print(
+        print(
             f"GOALKEEPER CHECK {manager_name}:",
             [
                 (
