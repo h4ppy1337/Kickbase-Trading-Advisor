@@ -26,18 +26,17 @@ def get_manager_performance(token, league_id, manager_id, manager_name):
     url = f"{BASE_URL}/leagues/{league_id}/managers/{manager_id}/performance"
     data = get_json_with_token(url, token)
 
-    print(f"Seasons for {manager_name}: {[(season.get('sid'), season.get('tp')) for season in data.get('it', [])]}")
-    
-    # Look for season ID "34" (current season 2025/2026)
+    # Current Kickbase season 2026/2027
+    current_season_id = "42"
+
     tp_value = 0
-    for season in data["it"]:
-        if season["sid"] == "34":
-            tp_value = season["tp"]
+
+    for season in data.get("it", []):
+        if season.get("sid") == current_season_id:
+            tp_value = season.get("tp", 0)
             break
     else:
-        # Fallback to first season if sid "34" not found
-        tp_value = data["it"][0]["tp"]
-        print(f"Warning: Season ID '34' not found for {manager_name}, using first season")
+        print(f"Warning: Season ID '{current_season_id}' not found for {manager_name}, using 0")
     
 
     return {
