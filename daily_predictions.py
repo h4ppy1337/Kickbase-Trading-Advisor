@@ -8,7 +8,8 @@ from features.predictions.predictions import (
 from features.predictions.preprocessing import (
     preprocess_player_data,
     split_data,
-    estimate_market_momentum_decay
+    estimate_market_momentum_decay,
+    estimate_regime_horizon_decay
 )
 from features.predictions.modeling import train_model, evaluate_model
 from kickbase_api.league import get_league_id, get_next_matchday_info
@@ -207,6 +208,79 @@ if pd.notna(negative_decay):
         f"8 additional updates: "
         f"{negative_decay ** 8 * 100:.1f}%"
     )
+
+
+regime_stats = estimate_regime_horizon_decay(
+    proc_player_df,
+    market_updates_until_matchday
+)
+
+
+print(
+    "\n=== REGIME-BASED HORIZON ANALYSIS ==="
+)
+
+print(
+    f"Horizon: "
+    f"{market_updates_until_matchday} updates"
+)
+
+
+for regime_name, stats in regime_stats.items():
+
+    readable_name = (
+        regime_name
+        .replace("_", " ")
+        .title()
+    )
+
+    print(
+        f"\n{readable_name}:"
+    )
+
+    print(
+        f"Samples: "
+        f"{stats['samples']}"
+    )
+
+    multiplier = stats[
+        "median_multiplier"
+    ]
+
+    decay = stats[
+        "implied_decay"
+    ]
+
+    if pd.notna(multiplier):
+
+        print(
+            f"Median cumulative multiplier: "
+            f"{multiplier:.3f}"
+        )
+
+    else:
+
+        print(
+            "Median cumulative multiplier: n/a"
+        )
+
+    if pd.notna(decay):
+
+        print(
+            f"Equivalent geometric decay: "
+            f"{decay:.4f}"
+        )
+
+        print(
+            f"Last update retains: "
+            f"{decay ** (market_updates_until_matchday - 1) * 100:.1f}%"
+        )
+
+    else:
+
+        print(
+            "Equivalent geometric decay: n/a"
+        )
 
 X_train, X_test, y_train, y_test = split_data(proc_player_df, features, target)
 print("\nData preprocessed.")
