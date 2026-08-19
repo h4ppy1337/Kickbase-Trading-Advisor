@@ -275,38 +275,6 @@ def build_manager_value_forecast(
         ]
 
         print(
-            f"GOALKEEPER CHECK {manager_name}:",
-            [
-                (
-                    player.get("pn"),
-                    player.get("lo"),
-                    player.get("pos")
-                )
-                for player in squad_players
-                if player.get("pos") == 1
-            ]
-        )
-
-        print(
-            f"NON-POSITIVE LO {manager_name}:",
-            [
-                (
-                    player.get("pn"),
-                    player.get("lo"),
-                    player.get("pos")
-                )
-                for player in squad_players
-                if player.get("lo") is None
-                or player.get("lo") <= 0
-            ]
-        )
-
-        print(
-            f"LINEUP CHECK {manager_name}: "
-            f"{len(lineup_by_lo)}/{len(squad_players)} players with lo > 0"
-        )
-
-        print(
             [
                 (
                     player.get("pn"),
@@ -321,7 +289,12 @@ def build_manager_value_forecast(
         predicted_next_update = 0.0
         predicted_last_update = 0.0
         predicted_total_change = 0.0
-
+        
+        starting_lineup_value_at_md = 0.0
+        bench_value_at_md = 0.0
+        starting_players = 0
+        bench_players = 0
+        
         ml_players = 0
         fallback_players = 0
         missing_players = 0
@@ -331,6 +304,12 @@ def build_manager_value_forecast(
             player_id = str(
                 player.get("pi")
             )
+
+            player_current_mv = float(
+                player.get("mv") or 0
+            )
+            
+            player_predicted_change = 0.0
 
             # Current Kickbase trend.
             # This also works for players missing from the ML dataset.
@@ -357,6 +336,11 @@ def build_manager_value_forecast(
                         0
                     )
                 )
+
+                if pd.notna(total_change):
+                    player_predicted_change = float(
+                        total_change
+                    )
 
                 next_change = (
                     next_update_lookup.get(
@@ -389,6 +373,30 @@ def build_manager_value_forecast(
 
                 ml_players += 1
 
+                player_value_at_md = (
+                    player_current_mv
+                    + player_predicted_change
+                )
+                
+                # lo = 0 is the goalkeeper.
+                # lo = 1..10 are starting outfield players.
+                # lo = None means the player is currently not in the lineup.
+                if player.get("lo") is None:
+                
+                    bench_value_at_md += (
+                        player_value_at_md
+                    )
+                
+                    bench_players += 1
+                
+                else:
+                
+                    starting_lineup_value_at_md += (
+                        player_value_at_md
+                    )
+                
+                    starting_players += 1
+                
                 continue
 
                         # -----------------------------
@@ -476,6 +484,31 @@ def build_manager_value_forecast(
                     fallback_total_change
                 )
 
+                player_predicted_change = (
+                    fallback_total_change
+                )
+                
+                player_value_at_md = (
+                    player_current_mv
+                    + player_predicted_change
+                )
+                
+                if player.get("lo") is None:
+                
+                    bench_value_at_md += (
+                        player_value_at_md
+                    )
+                
+                    bench_players += 1
+                
+                else:
+                
+                    starting_lineup_value_at_md += (
+                        player_value_at_md
+                    )
+                
+                    starting_players += 1
+                
                 fallback_players += 1
 
             else:
@@ -519,6 +552,11 @@ def build_manager_value_forecast(
             + future_login_bonus
         )
 
+        cash_after_bench_sales = (
+            predicted_budget
+            + bench_value_at_md
+        )
+
         manager_value = (
             predicted_team_value
             + predicted_budget
@@ -547,10 +585,19 @@ def build_manager_value_forecast(
             "Pred. Last Update": predicted_last_update,
             "Pred. MV Change to MD": predicted_total_change,
             "Team Value @ MD": predicted_team_value,
+        
+            "Starting XI @ MD": starting_lineup_value_at_md,
+            "Bench @ MD": bench_value_at_md,
+        
             "Cash Now": current_budget,
             "Future Login Bonus": future_login_bonus,
             "Cash @ MD": predicted_budget,
+            "Cash after Bench Sales @ MD": cash_after_bench_sales,
+        
             "Manager Value @ MD": manager_value,
+        
+            "Starting Players": starting_players,
+            "Bench Players": bench_players,
             "ML Players": ml_players,
             "Fallback Players": fallback_players,
             "Prediction Coverage": coverage
