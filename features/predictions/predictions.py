@@ -269,26 +269,26 @@ def build_manager_value_forecast(
         predicted_total_change = 0.0
         predicted_players = 0
 
-        missing_players = []
+                missing_players = []
 
-for player in squad_players:
+        for player in squad_players:
 
-    player_id = str(
-        player.get("pi")
-    )
+            player_id = str(
+                player.get("pi")
+            )
 
-    if player_id not in total_prediction_lookup:
+            if player_id not in total_prediction_lookup:
 
-        missing_players.append({
-            "name": player.get("pn"),
-            "player_id": player_id,
-            "mv": player.get("mv"),
-            "tfhmvt": player.get("tfhmvt"),
-            "sdmvt": player.get("sdmvt"),
-            "mvt": player.get("mvt")
-        })
+                missing_players.append({
+                    "name": player.get("pn"),
+                    "player_id": player_id,
+                    "mv": player.get("mv"),
+                    "tfhmvt": player.get("tfhmvt"),
+                    "sdmvt": player.get("sdmvt"),
+                    "mvt": player.get("mvt")
+                })
 
-        continue
+                continue
 
             total_change = total_prediction_lookup.get(
                 player_id,
@@ -332,12 +332,12 @@ for player in squad_players:
                 )
 
         if missing_players:
-    print(
-        f"\nMissing predictions for {manager_name}:"
-    )
+            print(
+                f"\nMissing predictions for {manager_name}:"
+            )
 
-    for missing_player in missing_players:
-        print(missing_player)
+            for missing_player in missing_players:
+                print(missing_player)
 
         
         manager_key = str(
