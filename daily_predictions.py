@@ -1,5 +1,15 @@
-from features.predictions.predictions import live_data_predictions, join_current_market, join_current_squad
-from features.predictions.preprocessing import preprocess_player_data, split_data
+from features.predictions.predictions import (
+    live_data_predictions,
+    join_current_market,
+    join_current_squad,
+    live_horizon_predictions,
+    build_manager_value_forecast
+)
+from features.predictions.preprocessing import (
+    preprocess_player_data,
+    split_data,
+    prepare_horizon_forecast_data
+)
 from features.predictions.modeling import train_model, evaluate_model
 from kickbase_api.league import get_league_id, get_next_matchday_info
 from kickbase_api.user import login
@@ -61,6 +71,7 @@ league_name = "LTKtB"  # Name of your league, must be exact match, can be done v
 start_budget = 50_000_000               # Starting budget of your league, used to calculate current budgets of other managers
 league_start_date = "2026-08-09"        # Start date of your league, used to filter activities, format: YYYY-MM-DD
 email = os.getenv("EMAIL_USER")         # Email to send recommendations to, can be the same as EMAIL_USER or different
+daily_login_bonus = 100_000
 
 # ---------------------------------------------------
 
@@ -112,7 +123,9 @@ login_days_until_matchday = max(
     0
 )
 
-future_login_bonus = login_days_until_matchday * 100_000
+future_login_bonus = (
+    login_days_until_matchday * daily_login_bonus
+)
 
 
 print("\n=== NEXT MATCHDAY FORECAST WINDOW ===")
@@ -158,6 +171,91 @@ print(f"\nModel evaluation:\nSigns correct: {signs_percent:.2f}%\nRMSE: {rmse:.2
 
 # Make live data predictions
 live_predictions_df = live_data_predictions(today_df, model, features)
+
+# ---------------------------------------------------
+# CUMULATIVE FORECAST UNTIL NEXT MATCHDAY
+# ---------------------------------------------------
+
+if market_updates_until_matchday > 0:
+
+    horizon_training_df = prepare_horizon_forecast_data(
+        proc_player_df,
+        features,
+        market_updates_until_matchday
+    )
+
+    if horizon_training_df.empty:
+        raise RuntimeError(
+            "Could not create training data for the "
+            f"{market_updates_until_matchday}-day forecast."
+        )
+
+    horizon_target = "mv_target_horizon_clipped"
+
+    (
+        X_horizon_train,
+        X_horizon_test,
+        y_horizon_train,
+        y_horizon_test
+    ) = split_data(
+        horizon_training_df,
+        features,
+        horizon_target
+    )
+
+    horizon_model = train_model(
+        X_horizon_train,
+        y_horizon_train
+    )
+
+    (
+        horizon_signs,
+        horizon_rmse,
+        horizon_mae,
+        horizon_r2
+    ) = evaluate_model(
+        horizon_model,
+        X_horizon_test,
+        y_horizon_test
+    )
+
+    print(
+        f"\nMatchday forecast model evaluation "
+        f"({market_updates_until_matchday} updates):"
+    )
+
+    print(f"Signs correct: {horizon_signs:.2f}%")
+    print(f"RMSE: {horizon_rmse:.2f}")
+    print(f"MAE: {horizon_mae:.2f}")
+    print(f"R2: {horizon_r2:.2f}")
+
+else:
+    horizon_model = None
+
+
+player_matchday_forecast_df = live_horizon_predictions(
+    today_df,
+    horizon_model,
+    features,
+    market_updates_until_matchday
+)
+
+
+manager_value_forecast_df = build_manager_value_forecast(
+    token,
+    league_id,
+    manager_budgets_df,
+    player_matchday_forecast_df,
+    future_login_bonus
+)
+
+
+print("\n=== MANAGER VALUE FORECAST ===")
+print(
+    f"Stichtag: Spieltag {next_matchday['day']} - "
+    f"{next_matchday_start.strftime('%d.%m.%Y %H:%M')}"
+)
+display(manager_value_forecast_df)
 
 # Join with current available players on the market
 market_recommendations_df = join_current_market(token, league_id, live_predictions_df)
