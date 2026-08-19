@@ -1,7 +1,8 @@
 from features.predictions.predictions import live_data_predictions, join_current_market, join_current_squad
 from features.predictions.preprocessing import preprocess_player_data, split_data
 from features.predictions.modeling import train_model, evaluate_model
-from kickbase_api.league import get_league_id
+from kickbase_api.league import get_league_id, get_competition_matchdays
+from kickbase_api.manager import get_managers, get_manager_squad
 from kickbase_api.user import login
 from features.notifier import send_mail
 from features.predictions.data_handler import (
@@ -70,6 +71,78 @@ print("\nLogged in to Kickbase.")
 
 # Get league ID
 league_id = get_league_id(token, league_name)
+
+# ----------------- DEBUG API RESPONSES -----------------
+
+# Inspect the squad response for one manager
+managers = get_managers(token, league_id)
+
+print("\n=== DEBUG: MANAGER SQUAD ===")
+
+if managers:
+    debug_manager_name, debug_manager_id = managers[0]
+
+    squad_debug = get_manager_squad(
+        token,
+        league_id,
+        debug_manager_id
+    )
+
+    print(f"Manager: {debug_manager_name}")
+    print(f"Top-level type: {type(squad_debug).__name__}")
+
+    if isinstance(squad_debug, dict):
+        print(f"Top-level keys: {list(squad_debug.keys())}")
+
+        for key, value in squad_debug.items():
+            if isinstance(value, list):
+                print(f"List field '{key}': {len(value)} entries")
+
+                if value:
+                    print(f"First entry in '{key}': {value[0]}")
+
+    elif isinstance(squad_debug, list):
+        print(f"Entries: {len(squad_debug)}")
+
+        if squad_debug:
+            print(f"First entry: {squad_debug[0]}")
+
+    else:
+        print(squad_debug)
+
+
+# Inspect the matchday response
+print("\n=== DEBUG: MATCHDAYS ===")
+
+matchdays_debug = get_competition_matchdays(
+    token,
+    competition_ids[0]
+)
+
+print(f"Top-level type: {type(matchdays_debug).__name__}")
+
+if isinstance(matchdays_debug, dict):
+    print(f"Top-level keys: {list(matchdays_debug.keys())}")
+
+    for key, value in matchdays_debug.items():
+        if isinstance(value, list):
+            print(f"List field '{key}': {len(value)} entries")
+
+            if value:
+                print(f"First entry in '{key}': {value[0]}")
+                print(f"Last entry in '{key}': {value[-1]}")
+
+elif isinstance(matchdays_debug, list):
+    print(f"Entries: {len(matchdays_debug)}")
+
+    if matchdays_debug:
+        print(f"First entry: {matchdays_debug[0]}")
+        print(f"Last entry: {matchdays_debug[-1]}")
+
+else:
+    print(matchdays_debug)
+
+# -------------------------------------------------------
 
 # Calculate (estimated) budgets of all managers in the league
 manager_budgets_df = calc_manager_budgets(token, league_id, league_start_date, start_budget)
