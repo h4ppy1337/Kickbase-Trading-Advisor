@@ -25,6 +25,8 @@ def get_manager_performance(token, league_id, manager_id, manager_name):
 
     url = f"{BASE_URL}/leagues/{league_id}/managers/{manager_id}/performance"
     data = get_json_with_token(url, token)
+
+    print(f"Seasons for {manager_name}: {[(season.get('sid'), season.get('tp')) for season in data.get('it', [])]}")
     
     # Look for season ID "34" (current season 2025/2026)
     tp_value = 0
