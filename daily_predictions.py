@@ -7,9 +7,7 @@ from features.predictions.predictions import (
 )
 from features.predictions.preprocessing import (
     preprocess_player_data,
-    split_data,
-    estimate_market_momentum_decay,
-    estimate_regime_horizon_decay
+    split_data
 )
 from features.predictions.modeling import train_model, evaluate_model
 from kickbase_api.league import get_league_id, get_next_matchday_info
@@ -73,7 +71,10 @@ start_budget = 50_000_000               # Starting budget of your league, used t
 league_start_date = "2026-08-09"        # Start date of your league, used to filter activities, format: YYYY-MM-DD
 email = os.getenv("EMAIL_USER")         # Email to send recommendations to, can be the same as EMAIL_USER or different
 daily_login_bonus = 100_000
-market_decay_factor = 0.95
+# Historically calibrated market value momentum decay.
+# Rising players retain momentum longer than falling players.
+positive_market_decay_factor = 0.955
+negative_market_decay_factor = 0.904
 
 # ---------------------------------------------------
 
@@ -164,124 +165,6 @@ print("\nData loaded from database.")
 # Preprocess the data and spit the data
 proc_player_df, today_df = preprocess_player_data(player_df)
 
-# Estimate historical market value momentum persistence
-decay_stats = estimate_market_momentum_decay(
-    proc_player_df
-)
-
-positive_decay = (
-    decay_stats["positive_factor"]
-)
-
-negative_decay = (
-    decay_stats["negative_factor"]
-)
-
-
-print(
-    "\n=== EMPIRICAL MOMENTUM DECAY ==="
-)
-
-print(
-    f"Positive trend factor: "
-    f"{positive_decay:.4f} "
-    f"({decay_stats['positive_samples']} samples)"
-)
-
-print(
-    f"Negative trend factor: "
-    f"{negative_decay:.4f} "
-    f"({decay_stats['negative_samples']} samples)"
-)
-
-
-if pd.notna(positive_decay):
-    print(
-        f"Positive trend retained after "
-        f"8 additional updates: "
-        f"{positive_decay ** 8 * 100:.1f}%"
-    )
-
-if pd.notna(negative_decay):
-    print(
-        f"Negative trend retained after "
-        f"8 additional updates: "
-        f"{negative_decay ** 8 * 100:.1f}%"
-    )
-
-
-regime_stats = estimate_regime_horizon_decay(
-    proc_player_df,
-    market_updates_until_matchday
-)
-
-
-print(
-    "\n=== REGIME-BASED HORIZON ANALYSIS ==="
-)
-
-print(
-    f"Horizon: "
-    f"{market_updates_until_matchday} updates"
-)
-
-
-for regime_name, stats in regime_stats.items():
-
-    readable_name = (
-        regime_name
-        .replace("_", " ")
-        .title()
-    )
-
-    print(
-        f"\n{readable_name}:"
-    )
-
-    print(
-        f"Samples: "
-        f"{stats['samples']}"
-    )
-
-    multiplier = stats[
-        "median_multiplier"
-    ]
-
-    decay = stats[
-        "implied_decay"
-    ]
-
-    if pd.notna(multiplier):
-
-        print(
-            f"Median cumulative multiplier: "
-            f"{multiplier:.3f}"
-        )
-
-    else:
-
-        print(
-            "Median cumulative multiplier: n/a"
-        )
-
-    if pd.notna(decay):
-
-        print(
-            f"Equivalent geometric decay: "
-            f"{decay:.4f}"
-        )
-
-        print(
-            f"Last update retains: "
-            f"{decay ** (market_updates_until_matchday - 1) * 100:.1f}%"
-        )
-
-    else:
-
-        print(
-            "Equivalent geometric decay: n/a"
-        )
-
 X_train, X_test, y_train, y_test = split_data(proc_player_df, features, target)
 print("\nData preprocessed.")
 
@@ -300,29 +183,48 @@ live_predictions_df = live_data_predictions(today_df, model, features)
 player_matchday_forecast_df = live_damped_predictions(
     live_predictions_df,
     market_updates_until_matchday,
-    market_decay_factor
+    positive_market_decay_factor,
+    negative_market_decay_factor
 )
 
-# Show how strongly the current momentum is damped
-if market_updates_until_matchday > 0:
+def calculate_decay_stats(
+    decay_factor,
+    updates
+):
 
-    if market_decay_factor == 1:
-        forecast_multiplier = market_updates_until_matchday
+    if updates <= 0:
+        return 0.0, 0.0
+
+    if decay_factor == 1:
+        cumulative = float(updates)
     else:
-        forecast_multiplier = (
-            1 - market_decay_factor ** market_updates_until_matchday
+        cumulative = (
+            1 - decay_factor ** updates
         ) / (
-            1 - market_decay_factor
+            1 - decay_factor
         )
 
-    last_update_factor = (
-        market_decay_factor
-        ** (market_updates_until_matchday - 1)
+    last = (
+        decay_factor
+        ** (updates - 1)
     )
 
-else:
-    forecast_multiplier = 0
-    last_update_factor = 0
+    return cumulative, last
+
+
+positive_multiplier, positive_last = (
+    calculate_decay_stats(
+        positive_market_decay_factor,
+        market_updates_until_matchday
+    )
+)
+
+negative_multiplier, negative_last = (
+    calculate_decay_stats(
+        negative_market_decay_factor,
+        market_updates_until_matchday
+    )
+)
 
 
 print("\n=== DAMPED MARKET VALUE FORECAST ===")
@@ -333,19 +235,33 @@ print(
 )
 
 print(
-    f"Decay factor per update: "
-    f"{market_decay_factor:.3f}"
+    f"Positive decay factor: "
+    f"{positive_market_decay_factor:.3f}"
 )
 
 print(
-    f"Cumulative multiplier: "
-    f"{forecast_multiplier:.3f}"
+    f"Positive cumulative multiplier: "
+    f"{positive_multiplier:.3f}"
 )
 
 print(
-    f"Last update retains: "
-    f"{last_update_factor * 100:.1f}% "
-    f"of the first predicted update"
+    f"Positive last update retains: "
+    f"{positive_last * 100:.1f}%"
+)
+
+print(
+    f"Negative decay factor: "
+    f"{negative_market_decay_factor:.3f}"
+)
+
+print(
+    f"Negative cumulative multiplier: "
+    f"{negative_multiplier:.3f}"
+)
+
+print(
+    f"Negative last update retains: "
+    f"{negative_last * 100:.1f}%"
 )
 
 
@@ -356,7 +272,8 @@ manager_value_forecast_df = build_manager_value_forecast(
     player_matchday_forecast_df,
     future_login_bonus,
     market_updates_until_matchday,
-    market_decay_factor
+    positive_market_decay_factor,
+    negative_market_decay_factor
 )
 
 
