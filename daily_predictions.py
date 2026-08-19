@@ -1,8 +1,7 @@
 from features.predictions.predictions import live_data_predictions, join_current_market, join_current_squad
 from features.predictions.preprocessing import preprocess_player_data, split_data
 from features.predictions.modeling import train_model, evaluate_model
-from kickbase_api.league import get_league_id, get_competition_matchdays
-from kickbase_api.manager import get_managers, get_manager_squad
+from kickbase_api.league import get_league_id, get_next_matchday_info
 from kickbase_api.user import login
 from features.notifier import send_mail
 from features.predictions.data_handler import (
@@ -11,6 +10,8 @@ from features.predictions.data_handler import (
     save_player_data_to_db,
     load_player_data_from_db,
 )
+from datetime import datetime, timedelta, time
+from zoneinfo import ZoneInfo
 from features.budgets import calc_manager_budgets
 from IPython.display import display
 from dotenv import load_dotenv
@@ -72,77 +73,66 @@ print("\nLogged in to Kickbase.")
 # Get league ID
 league_id = get_league_id(token, league_name)
 
-# ----------------- DEBUG API RESPONSES -----------------
+# Get next matchday and calculate forecast window
+next_matchday = get_next_matchday_info(token, competition_ids[0])
 
-# Inspect the squad response for one manager
-managers = get_managers(token, league_id)
+if next_matchday is None:
+    raise RuntimeError("No future matchday found.")
 
-print("\n=== DEBUG: MANAGER SQUAD ===")
+berlin_tz = ZoneInfo("Europe/Berlin")
+now = datetime.now(berlin_tz)
 
-if managers:
-    debug_manager_name, debug_manager_id = managers[0]
+next_matchday_start = next_matchday["start"]
 
-    squad_debug = get_manager_squad(
-        token,
-        league_id,
-        debug_manager_id
+
+# Count future market value updates before kickoff
+# Kickbase market values are assumed to update around 22:15.
+market_updates_until_matchday = 0
+check_date = now.date()
+
+while check_date <= next_matchday_start.date():
+
+    update_time = datetime.combine(
+        check_date,
+        time(hour=22, minute=15),
+        tzinfo=berlin_tz
     )
 
-    print(f"Manager: {debug_manager_name}")
-    print(f"Top-level type: {type(squad_debug).__name__}")
+    if now < update_time < next_matchday_start:
+        market_updates_until_matchday += 1
 
-    if isinstance(squad_debug, dict):
-        print(f"Top-level keys: {list(squad_debug.keys())}")
-
-        for key, value in squad_debug.items():
-            if isinstance(value, list):
-                print(f"List field '{key}': {len(value)} entries")
-
-                if value:
-                    print(f"First entry in '{key}': {value[0]}")
-
-    elif isinstance(squad_debug, list):
-        print(f"Entries: {len(squad_debug)}")
-
-        if squad_debug:
-            print(f"First entry: {squad_debug[0]}")
-
-    else:
-        print(squad_debug)
+    check_date += timedelta(days=1)
 
 
-# Inspect the matchday response
-print("\n=== DEBUG: MATCHDAYS ===")
-
-matchdays_debug = get_competition_matchdays(
-    token,
-    competition_ids[0]
+# Count future login bonuses.
+# Today is not counted because the current budget estimate already
+# represents the current day. The matchday itself can still earn a login bonus.
+login_days_until_matchday = max(
+    (next_matchday_start.date() - now.date()).days,
+    0
 )
 
-print(f"Top-level type: {type(matchdays_debug).__name__}")
+future_login_bonus = login_days_until_matchday * 100_000
 
-if isinstance(matchdays_debug, dict):
-    print(f"Top-level keys: {list(matchdays_debug.keys())}")
 
-    for key, value in matchdays_debug.items():
-        if isinstance(value, list):
-            print(f"List field '{key}': {len(value)} entries")
-
-            if value:
-                print(f"First entry in '{key}': {value[0]}")
-                print(f"Last entry in '{key}': {value[-1]}")
-
-elif isinstance(matchdays_debug, list):
-    print(f"Entries: {len(matchdays_debug)}")
-
-    if matchdays_debug:
-        print(f"First entry: {matchdays_debug[0]}")
-        print(f"Last entry: {matchdays_debug[-1]}")
-
-else:
-    print(matchdays_debug)
-
-# -------------------------------------------------------
+print("\n=== NEXT MATCHDAY FORECAST WINDOW ===")
+print(f"Matchday: {next_matchday['day']}")
+print(
+    f"Kickoff: "
+    f"{next_matchday_start.strftime('%d.%m.%Y %H:%M')}"
+)
+print(
+    f"Market value updates until kickoff: "
+    f"{market_updates_until_matchday}"
+)
+print(
+    f"Future login bonus days: "
+    f"{login_days_until_matchday}"
+)
+print(
+    f"Future login bonus per manager: "
+    f"{future_login_bonus:,.0f} EUR".replace(",", ".")
+)
 
 # Calculate (estimated) budgets of all managers in the league
 manager_budgets_df = calc_manager_budgets(token, league_id, league_start_date, start_budget)
