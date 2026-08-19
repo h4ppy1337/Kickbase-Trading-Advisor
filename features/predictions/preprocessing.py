@@ -306,3 +306,225 @@ def estimate_market_momentum_decay(
         "negative_samples":
             negative_samples
     }
+
+def estimate_regime_horizon_decay(
+    df,
+    horizon_days,
+    min_change=100_000
+):
+    """
+    Estimate multi-day market value persistence for historical
+    situations similar to the current pre-matchday momentum phase.
+
+    Instead of extrapolating a one-day factor repeatedly, this
+    measures the actual cumulative change over the entire horizon.
+    """
+
+    if horizon_days <= 1:
+        return {}
+
+    data = df.copy()
+
+    data["date"] = (
+        pd.to_datetime(data["date"])
+        .dt.normalize()
+    )
+
+    data = (
+        data
+        .sort_values(["player_id", "date"])
+        .drop_duplicates(
+            subset=["player_id", "date"],
+            keep="last"
+        )
+    )
+
+    # Exact market value horizon_days later
+    future_values = data[
+        ["player_id", "date", "mv"]
+    ].copy()
+
+    future_values = future_values.rename(
+        columns={
+            "date": "future_date",
+            "mv": "future_mv"
+        }
+    )
+
+    data["future_date"] = (
+        data["date"]
+        + pd.to_timedelta(
+            horizon_days,
+            unit="D"
+        )
+    )
+
+    data = data.merge(
+        future_values,
+        on=["player_id", "future_date"],
+        how="left"
+    )
+
+    data["cumulative_future_change"] = (
+        data["future_mv"]
+        - data["mv"]
+    )
+
+    required_columns = [
+        "mv_change_1d",
+        "mv_change_3d",
+        "mv_trend_7d",
+        "days_to_next",
+        "cumulative_future_change"
+    ]
+
+    data = data.dropna(
+        subset=required_columns
+    )
+
+    # We want historical situations reasonably similar
+    # to the current long pre-matchday window.
+    min_days_to_match = max(
+        7,
+        horizon_days - 2
+    )
+
+    def implied_decay(multiplier):
+
+        # A normal geometric decay with phi between
+        # 0 and 1 has a cumulative multiplier
+        # between 1 and horizon_days.
+        if (
+            pd.isna(multiplier)
+            or multiplier <= 1
+        ):
+            return np.nan
+
+        if multiplier >= horizon_days:
+            return 1.0
+
+        low = 0.0
+        high = 1.0
+
+        for _ in range(60):
+
+            phi = (
+                low + high
+            ) / 2
+
+            if phi == 1:
+                geometric_sum = horizon_days
+
+            else:
+                geometric_sum = (
+                    1 - phi ** horizon_days
+                ) / (
+                    1 - phi
+                )
+
+            if geometric_sum < multiplier:
+                low = phi
+            else:
+                high = phi
+
+        return (
+            low + high
+        ) / 2
+
+    def summarize(subset):
+
+        subset = subset.copy()
+
+        if subset.empty:
+            return {
+                "samples": 0,
+                "median_multiplier": np.nan,
+                "implied_decay": np.nan
+            }
+
+        # Relative cumulative development compared with
+        # the known current 24h change.
+        subset["horizon_multiplier"] = (
+            subset["cumulative_future_change"]
+            / subset["mv_change_1d"]
+        )
+
+        # Median is deliberately used because individual
+        # market value paths can contain extreme reversals.
+        multiplier = (
+            subset["horizon_multiplier"]
+            .median()
+        )
+
+        return {
+            "samples": len(subset),
+            "median_multiplier": multiplier,
+            "implied_decay": implied_decay(
+                multiplier
+            )
+        }
+
+    # Positive momentum:
+    # rising today, rising across 3 days and 7 days,
+    # and relatively far away from the next match.
+    positive_persistent = data[
+        (data["mv_change_1d"] >= min_change)
+        & (data["mv_change_3d"] > 0)
+        & (data["mv_trend_7d"] > 0)
+        & (
+            data["days_to_next"]
+            >= min_days_to_match
+        )
+    ]
+
+    # Stronger definition:
+    # not just positive, but a substantial multi-day streak.
+    positive_strong = data[
+        (data["mv_change_1d"] >= 150_000)
+        & (
+            data["mv_change_3d"]
+            >= 2 * data["mv_change_1d"]
+        )
+        & (data["mv_trend_7d"] > 0)
+        & (
+            data["days_to_next"]
+            >= min_days_to_match
+        )
+    ]
+
+    negative_persistent = data[
+        (data["mv_change_1d"] <= -min_change)
+        & (data["mv_change_3d"] < 0)
+        & (data["mv_trend_7d"] < 0)
+        & (
+            data["days_to_next"]
+            >= min_days_to_match
+        )
+    ]
+
+    negative_strong = data[
+        (data["mv_change_1d"] <= -150_000)
+        & (
+            data["mv_change_3d"]
+            <= 2 * data["mv_change_1d"]
+        )
+        & (data["mv_trend_7d"] < 0)
+        & (
+            data["days_to_next"]
+            >= min_days_to_match
+        )
+    ]
+
+    return {
+        "positive_persistent":
+            summarize(positive_persistent),
+
+        "positive_strong":
+            summarize(positive_strong),
+
+        "negative_persistent":
+            summarize(negative_persistent),
+
+        "negative_strong":
+            summarize(negative_strong)
+    }
