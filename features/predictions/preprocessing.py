@@ -103,3 +103,71 @@ def split_data(df, features, target):
     y_test = test[target]
 
     return X_train, X_test, y_train, y_test
+
+
+def prepare_horizon_forecast_data(df, features, horizon_days):
+    """
+    Prepare training data for a cumulative market value prediction
+    over an exact number of future daily market value updates.
+    """
+
+    if horizon_days <= 0:
+        return pd.DataFrame()
+
+    data = df.copy()
+
+    # Normalize dates and keep one row per player/date
+    data["date"] = pd.to_datetime(data["date"]).dt.normalize()
+    data = (
+        data.sort_values(["player_id", "date"])
+        .drop_duplicates(subset=["player_id", "date"], keep="last")
+    )
+
+    # Lookup table containing future market values
+    future_values = data[["player_id", "date", "mv"]].copy()
+    future_values = future_values.rename(
+        columns={
+            "date": "future_date",
+            "mv": "future_mv"
+        }
+    )
+
+    # Exact future date corresponding to our forecast horizon
+    data["future_date"] = (
+        data["date"] + pd.to_timedelta(horizon_days, unit="D")
+    )
+
+    # Attach the market value from that future date
+    data = data.merge(
+        future_values,
+        on=["player_id", "future_date"],
+        how="left"
+    )
+
+    # Cumulative market value change over the entire horizon
+    data["mv_target_horizon"] = data["future_mv"] - data["mv"]
+
+    # Remove rows where no exact future market value is available
+    data = data.dropna(
+        subset=features + ["mv_target_horizon"]
+    )
+
+    if data.empty:
+        return data
+
+    # Clip extreme target outliers, analogous to the existing daily model
+    q1 = data["mv_target_horizon"].quantile(0.25)
+    q3 = data["mv_target_horizon"].quantile(0.75)
+    iqr = q3 - q1
+
+    lower_bound = q1 - 2.5 * iqr
+    upper_bound = q3 + 2.5 * iqr
+
+    data["mv_target_horizon_clipped"] = (
+        data["mv_target_horizon"].clip(
+            lower_bound,
+            upper_bound
+        )
+    )
+
+    return data
