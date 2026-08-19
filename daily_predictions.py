@@ -2,13 +2,12 @@ from features.predictions.predictions import (
     live_data_predictions,
     join_current_market,
     join_current_squad,
-    live_horizon_predictions,
+    live_damped_predictions,
     build_manager_value_forecast
 )
 from features.predictions.preprocessing import (
     preprocess_player_data,
-    split_data,
-    prepare_horizon_forecast_data
+    split_data
 )
 from features.predictions.modeling import train_model, evaluate_model
 from kickbase_api.league import get_league_id, get_next_matchday_info
@@ -72,6 +71,7 @@ start_budget = 50_000_000               # Starting budget of your league, used t
 league_start_date = "2026-08-09"        # Start date of your league, used to filter activities, format: YYYY-MM-DD
 email = os.getenv("EMAIL_USER")         # Email to send recommendations to, can be the same as EMAIL_USER or different
 daily_login_bonus = 100_000
+market_decay_factor = 0.95
 
 # ---------------------------------------------------
 
@@ -173,71 +173,58 @@ print(f"\nModel evaluation:\nSigns correct: {signs_percent:.2f}%\nRMSE: {rmse:.2
 live_predictions_df = live_data_predictions(today_df, model, features)
 
 # ---------------------------------------------------
-# CUMULATIVE FORECAST UNTIL NEXT MATCHDAY
+# DAMPED MARKET VALUE FORECAST UNTIL NEXT MATCHDAY
 # ---------------------------------------------------
 
+player_matchday_forecast_df = live_damped_predictions(
+    live_predictions_df,
+    market_updates_until_matchday,
+    market_decay_factor
+)
+
+# Show how strongly the current momentum is damped
 if market_updates_until_matchday > 0:
 
-    horizon_training_df = prepare_horizon_forecast_data(
-        proc_player_df,
-        features,
-        market_updates_until_matchday
-    )
-
-    if horizon_training_df.empty:
-        raise RuntimeError(
-            "Could not create training data for the "
-            f"{market_updates_until_matchday}-day forecast."
+    if market_decay_factor == 1:
+        forecast_multiplier = market_updates_until_matchday
+    else:
+        forecast_multiplier = (
+            1 - market_decay_factor ** market_updates_until_matchday
+        ) / (
+            1 - market_decay_factor
         )
 
-    horizon_target = "mv_target_horizon_clipped"
-
-    (
-        X_horizon_train,
-        X_horizon_test,
-        y_horizon_train,
-        y_horizon_test
-    ) = split_data(
-        horizon_training_df,
-        features,
-        horizon_target
+    last_update_factor = (
+        market_decay_factor
+        ** (market_updates_until_matchday - 1)
     )
-
-    horizon_model = train_model(
-        X_horizon_train,
-        y_horizon_train
-    )
-
-    (
-        horizon_signs,
-        horizon_rmse,
-        horizon_mae,
-        horizon_r2
-    ) = evaluate_model(
-        horizon_model,
-        X_horizon_test,
-        y_horizon_test
-    )
-
-    print(
-        f"\nMatchday forecast model evaluation "
-        f"({market_updates_until_matchday} updates):"
-    )
-
-    print(f"Signs correct: {horizon_signs:.2f}%")
-    print(f"RMSE: {horizon_rmse:.2f}")
-    print(f"MAE: {horizon_mae:.2f}")
-    print(f"R2: {horizon_r2:.2f}")
 
 else:
-    horizon_model = None
+    forecast_multiplier = 0
+    last_update_factor = 0
 
 
-player_matchday_forecast_df = live_horizon_predictions(
-    today_df,
-    horizon_model,
-    features,
-    market_updates_until_matchday
+print("\n=== DAMPED MARKET VALUE FORECAST ===")
+
+print(
+    f"Market updates: "
+    f"{market_updates_until_matchday}"
+)
+
+print(
+    f"Decay factor per update: "
+    f"{market_decay_factor:.3f}"
+)
+
+print(
+    f"Cumulative multiplier: "
+    f"{forecast_multiplier:.3f}"
+)
+
+print(
+    f"Last update retains: "
+    f"{last_update_factor * 100:.1f}% "
+    f"of the first predicted update"
 )
 
 
@@ -248,6 +235,17 @@ manager_value_forecast_df = build_manager_value_forecast(
     player_matchday_forecast_df,
     future_login_bonus
 )
+
+
+print("\n=== MANAGER VALUE FORECAST ===")
+
+print(
+    f"Stichtag: Spieltag "
+    f"{next_matchday['day']} - "
+    f"{next_matchday_start.strftime('%d.%m.%Y %H:%M')}"
+)
+
+display(manager_value_forecast_df)
 
 
 print("\n=== MANAGER VALUE FORECAST ===")
