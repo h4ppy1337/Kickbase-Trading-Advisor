@@ -194,11 +194,16 @@ def build_manager_value_forecast(
     league_id,
     manager_budgets_df,
     player_forecast_df,
-    future_login_bonus
+    future_login_bonus,
+    market_updates_until_matchday,
+    market_decay_factor
 ):
     """
     Aggregate the damped MV forecasts of all players
     for every manager.
+
+    Players without an ML prediction use their current
+    Kickbase 24h market value trend as a fallback.
     """
 
     predictions = player_forecast_df.copy()
@@ -208,13 +213,6 @@ def build_manager_value_forecast(
         zip(
             predictions["player_id"],
             predictions["predicted_mv_change_until_matchday"]
-        )
-    )
-
-    last_change_lookup = dict(
-        zip(
-            predictions["player_id"],
-            predictions["mv_change_1d"]
         )
     )
 
@@ -233,9 +231,41 @@ def build_manager_value_forecast(
     )
 
     budget_df = manager_budgets_df.copy()
-    budget_df["User_Key"] = budget_df["User"].astype(str).str.strip()
+    budget_df["User_Key"] = (
+        budget_df["User"]
+        .astype(str)
+        .str.strip()
+    )
 
-    managers = get_managers(token, league_id)
+    # Multiplier for a fallback player's complete forecast
+    if market_updates_until_matchday <= 0:
+        fallback_cumulative_multiplier = 0.0
+        fallback_last_multiplier = 0.0
+
+    elif market_decay_factor == 1:
+        fallback_cumulative_multiplier = float(
+            market_updates_until_matchday
+        )
+        fallback_last_multiplier = 1.0
+
+    else:
+        fallback_cumulative_multiplier = (
+            1
+            - market_decay_factor
+            ** market_updates_until_matchday
+        ) / (
+            1 - market_decay_factor
+        )
+
+        fallback_last_multiplier = (
+            market_decay_factor
+            ** (market_updates_until_matchday - 1)
+        )
+
+    managers = get_managers(
+        token,
+        league_id
+    )
 
     results = []
 
@@ -253,86 +283,149 @@ def build_manager_value_forecast(
         predicted_next_update = 0.0
         predicted_last_update = 0.0
         predicted_total_change = 0.0
-        predicted_players = 0
-        missing_players = []
+
+        ml_players = 0
+        fallback_players = 0
+        missing_players = 0
 
         for player in squad_players:
 
-            player_id = str(player.get("pi"))
+            player_id = str(
+                player.get("pi")
+            )
 
-            if player_id not in total_prediction_lookup:
+            # Current Kickbase trend.
+            # This also works for players missing from the ML dataset.
+            current_24h_change = player.get(
+                "tfhmvt"
+            )
 
-                missing_players.append({
-                    "name": player.get("pn"),
-                    "player_id": player_id,
-                    "mv": player.get("mv"),
-                    "tfhmvt": player.get("tfhmvt"),
-                    "sdmvt": player.get("sdmvt"),
-                    "mvt": player.get("mvt")
-                })
+            if (
+                current_24h_change is not None
+                and pd.notna(current_24h_change)
+            ):
+                last_24h_change += float(
+                    current_24h_change
+                )
+
+            # -----------------------------
+            # Normal ML prediction
+            # -----------------------------
+            if player_id in total_prediction_lookup:
+
+                total_change = (
+                    total_prediction_lookup.get(
+                        player_id,
+                        0
+                    )
+                )
+
+                next_change = (
+                    next_update_lookup.get(
+                        player_id,
+                        0
+                    )
+                )
+
+                final_change = (
+                    last_update_lookup.get(
+                        player_id,
+                        0
+                    )
+                )
+
+                if pd.notna(total_change):
+                    predicted_total_change += float(
+                        total_change
+                    )
+
+                if pd.notna(next_change):
+                    predicted_next_update += float(
+                        next_change
+                    )
+
+                if pd.notna(final_change):
+                    predicted_last_update += float(
+                        final_change
+                    )
+
+                ml_players += 1
 
                 continue
 
-            total_change = total_prediction_lookup.get(
-                player_id,
-                0
-            )
+            # -----------------------------
+            # Fallback prediction
+            # -----------------------------
+            if (
+                current_24h_change is not None
+                and pd.notna(current_24h_change)
+            ):
 
-            if pd.notna(total_change):
-                predicted_total_change += float(total_change)
-                predicted_players += 1
+                current_24h_change = float(
+                    current_24h_change
+                )
 
-            last_change = last_change_lookup.get(
-                player_id,
-                0
-            )
+                # No ML prediction available:
+                # assume tomorrow retains 95% (or configured value)
+                # of today's momentum.
+                fallback_next_change = (
+                    current_24h_change
+                    * market_decay_factor
+                )
 
-            if pd.notna(last_change):
-                last_24h_change += float(last_change)
+                fallback_last_change = (
+                    fallback_next_change
+                    * fallback_last_multiplier
+                )
 
-            next_change = next_update_lookup.get(
-                player_id,
-                0
-            )
+                fallback_total_change = (
+                    fallback_next_change
+                    * fallback_cumulative_multiplier
+                )
 
-            if pd.notna(next_change):
-                predicted_next_update += float(next_change)
+                predicted_next_update += (
+                    fallback_next_change
+                )
 
-            final_change = last_update_lookup.get(
-                player_id,
-                0
-            )
+                predicted_last_update += (
+                    fallback_last_change
+                )
 
-            if pd.notna(final_change):
-                predicted_last_update += float(final_change)
+                predicted_total_change += (
+                    fallback_total_change
+                )
 
-        if missing_players:
-            print(
-                f"\nMissing predictions for {manager_name}:"
-            )
+                fallback_players += 1
 
-            for missing_player in missing_players:
-                print(missing_player)
+            else:
+                missing_players += 1
 
-        manager_key = str(manager_name).strip()
+        manager_key = str(
+            manager_name
+        ).strip()
 
         manager_budget_row = budget_df[
-            budget_df["User_Key"] == manager_key
+            budget_df["User_Key"]
+            == manager_key
         ]
 
         if manager_budget_row.empty:
             print(
-                f"Warning: No budget information found for "
-                f"{manager_name}"
+                f"Warning: No budget information "
+                f"found for {manager_name}"
             )
             continue
 
         current_team_value = float(
-            manager_budget_row.iloc[0]["Team Value"]
+            manager_budget_row.iloc[0][
+                "Team Value"
+            ]
         )
 
         current_budget = float(
-            manager_budget_row.iloc[0]["Budget"]
+            manager_budget_row.iloc[0][
+                "Budget"
+            ]
         )
 
         predicted_team_value = (
@@ -350,10 +443,17 @@ def build_manager_value_forecast(
             + predicted_budget
         )
 
-        squad_size = len(squad_players)
+        squad_size = len(
+            squad_players
+        )
+
+        total_predicted_players = (
+            ml_players
+            + fallback_players
+        )
 
         coverage = (
-            f"{predicted_players}/{squad_size}"
+            f"{total_predicted_players}/{squad_size}"
             if squad_size > 0
             else "0/0"
         )
@@ -370,10 +470,14 @@ def build_manager_value_forecast(
             "Future Login Bonus": future_login_bonus,
             "Cash @ MD": predicted_budget,
             "Manager Value @ MD": manager_value,
+            "ML Players": ml_players,
+            "Fallback Players": fallback_players,
             "Prediction Coverage": coverage
         })
 
-    result_df = pd.DataFrame(results)
+    result_df = pd.DataFrame(
+        results
+    )
 
     if not result_df.empty:
         result_df = result_df.sort_values(
