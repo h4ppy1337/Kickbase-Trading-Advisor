@@ -111,68 +111,80 @@ def join_current_market(token, league_id, today_df_results):
 def live_damped_predictions(
     live_predictions_df,
     horizon_days,
-    decay_factor
+    positive_decay_factor,
+    negative_decay_factor
 ):
     """
-    Extend the existing next-update ML prediction over multiple
-    future market value updates using exponential damping.
-
-    Example with decay_factor = 0.95:
-    day 1 = 100%
-    day 2 = 95%
-    day 3 = 90.25%
-    ...
+    Extend the existing next-update ML prediction until the next
+    matchday using different exponential decay factors for rising
+    and falling players.
     """
 
-    if not 0 < decay_factor <= 1:
+    if not 0 < positive_decay_factor <= 1:
         raise ValueError(
-            "decay_factor must be greater than 0 and at most 1."
+            "positive_decay_factor must be greater than 0 and at most 1."
+        )
+
+    if not 0 < negative_decay_factor <= 1:
+        raise ValueError(
+            "negative_decay_factor must be greater than 0 and at most 1."
         )
 
     results = live_predictions_df.copy()
 
-    # Existing Random Forest prediction for the very next MV update
+    # Existing Random Forest prediction for the next MV update
     results["predicted_next_update"] = (
         results["predicted_mv_target"]
     )
 
+    # Use the positive decay for predicted risers and
+    # the negative decay for predicted fallers.
+    results["decay_factor_used"] = np.where(
+        results["predicted_next_update"] >= 0,
+        positive_decay_factor,
+        negative_decay_factor
+    )
+
     if horizon_days <= 0:
 
-        cumulative_multiplier = 0.0
-        last_update_multiplier = 0.0
-
-    elif decay_factor == 1:
-
-        cumulative_multiplier = float(horizon_days)
-        last_update_multiplier = 1.0
+        results["predicted_last_update"] = 0.0
+        results[
+            "predicted_mv_change_until_matchday"
+        ] = 0.0
 
     else:
 
+        decay = results["decay_factor_used"]
+
         # Geometric sum:
         # 1 + phi + phi^2 + ... + phi^(n-1)
-        cumulative_multiplier = (
-            1 - decay_factor ** horizon_days
-        ) / (
-            1 - decay_factor
+        cumulative_multiplier = np.where(
+            decay == 1,
+            float(horizon_days),
+            (
+                1 - decay ** horizon_days
+            ) / (
+                1 - decay
+            )
         )
 
         last_update_multiplier = (
-            decay_factor ** (horizon_days - 1)
+            decay ** (horizon_days - 1)
         )
 
-    # Prediction for the final MV update before kickoff
-    results["predicted_last_update"] = np.round(
-        results["predicted_next_update"]
-        * last_update_multiplier,
-        2
-    )
+        results["predicted_last_update"] = np.round(
+            results["predicted_next_update"]
+            * last_update_multiplier,
+            2
+        )
 
-    # Total predicted MV change until kickoff
-    results["predicted_mv_change_until_matchday"] = np.round(
-        results["predicted_next_update"]
-        * cumulative_multiplier,
-        2
-    )
+        results[
+            "predicted_mv_change_until_matchday"
+        ] = np.round(
+            results["predicted_next_update"]
+            * cumulative_multiplier,
+            2
+        )
 
     return results[
         [
@@ -184,7 +196,8 @@ def live_damped_predictions(
             "mv_change_1d",
             "predicted_next_update",
             "predicted_last_update",
-            "predicted_mv_change_until_matchday"
+            "predicted_mv_change_until_matchday",
+            "decay_factor_used"
         ]
     ]
 
@@ -196,7 +209,8 @@ def build_manager_value_forecast(
     player_forecast_df,
     future_login_bonus,
     market_updates_until_matchday,
-    market_decay_factor
+    positive_decay_factor,
+    negative_decay_factor
 ):
     """
     Aggregate the damped MV forecasts of all players
@@ -236,31 +250,6 @@ def build_manager_value_forecast(
         .astype(str)
         .str.strip()
     )
-
-    # Multiplier for a fallback player's complete forecast
-    if market_updates_until_matchday <= 0:
-        fallback_cumulative_multiplier = 0.0
-        fallback_last_multiplier = 0.0
-
-    elif market_decay_factor == 1:
-        fallback_cumulative_multiplier = float(
-            market_updates_until_matchday
-        )
-        fallback_last_multiplier = 1.0
-
-    else:
-        fallback_cumulative_multiplier = (
-            1
-            - market_decay_factor
-            ** market_updates_until_matchday
-        ) / (
-            1 - market_decay_factor
-        )
-
-        fallback_last_multiplier = (
-            market_decay_factor
-            ** (market_updates_until_matchday - 1)
-        )
 
     managers = get_managers(
         token,
@@ -353,7 +342,7 @@ def build_manager_value_forecast(
 
                 continue
 
-            # -----------------------------
+                        # -----------------------------
             # Fallback prediction
             # -----------------------------
             if (
@@ -365,23 +354,66 @@ def build_manager_value_forecast(
                     current_24h_change
                 )
 
-                # No ML prediction available:
-                # assume tomorrow retains 95% (or configured value)
-                # of today's momentum.
+                # Without an ML prediction, use the sign of the
+                # current Kickbase 24h trend to choose the decay.
+                if current_24h_change >= 0:
+                    fallback_decay = (
+                        positive_decay_factor
+                    )
+                else:
+                    fallback_decay = (
+                        negative_decay_factor
+                    )
+
+                # The known value is today's change.
+                # Therefore the first FUTURE update is already
+                # one decay step after today's momentum.
                 fallback_next_change = (
                     current_24h_change
-                    * market_decay_factor
+                    * fallback_decay
                 )
 
-                fallback_last_change = (
-                    fallback_next_change
-                    * fallback_last_multiplier
-                )
+                if market_updates_until_matchday <= 0:
 
-                fallback_total_change = (
-                    fallback_next_change
-                    * fallback_cumulative_multiplier
-                )
+                    fallback_total_change = 0.0
+                    fallback_last_change = 0.0
+
+                else:
+
+                    if fallback_decay == 1:
+
+                        fallback_cumulative_multiplier = float(
+                            market_updates_until_matchday
+                        )
+
+                    else:
+
+                        fallback_cumulative_multiplier = (
+                            1
+                            - fallback_decay
+                            ** market_updates_until_matchday
+                        ) / (
+                            1
+                            - fallback_decay
+                        )
+
+                    fallback_last_multiplier = (
+                        fallback_decay
+                        ** (
+                            market_updates_until_matchday
+                            - 1
+                        )
+                    )
+
+                    fallback_last_change = (
+                        fallback_next_change
+                        * fallback_last_multiplier
+                    )
+
+                    fallback_total_change = (
+                        fallback_next_change
+                        * fallback_cumulative_multiplier
+                    )
 
                 predicted_next_update += (
                     fallback_next_change
