@@ -171,3 +171,138 @@ def prepare_horizon_forecast_data(df, features, horizon_days):
     )
 
     return data
+
+def estimate_market_momentum_decay(
+    df,
+    min_abs_change=50_000
+):
+    """
+    Estimate how much of a player's daily market value momentum
+    is typically retained on the following day.
+
+    A factor of 0.95 means:
+    tomorrow's change is historically about 95% of today's change.
+
+    Positive and negative trends are estimated separately.
+    """
+
+    data = df[
+        [
+            "player_id",
+            "date",
+            "mv_change_1d"
+        ]
+    ].copy()
+
+    data["date"] = (
+        pd.to_datetime(data["date"])
+        .dt.normalize()
+    )
+
+    data = (
+        data
+        .dropna(
+            subset=[
+                "player_id",
+                "date",
+                "mv_change_1d"
+            ]
+        )
+        .sort_values(
+            ["player_id", "date"]
+        )
+        .drop_duplicates(
+            subset=["player_id", "date"],
+            keep="last"
+        )
+    )
+
+    # Create a copy containing the following day's change
+    next_day = data[
+        [
+            "player_id",
+            "date",
+            "mv_change_1d"
+        ]
+    ].copy()
+
+    next_day = next_day.rename(
+        columns={
+            "mv_change_1d":
+                "next_mv_change"
+        }
+    )
+
+    # Shift the next-day date backwards so that
+    # current day and following day can be merged
+    next_day["date"] = (
+        next_day["date"]
+        - pd.Timedelta(days=1)
+    )
+
+    pairs = data.merge(
+        next_day,
+        on=["player_id", "date"],
+        how="inner"
+    )
+
+    # Ignore tiny daily changes.
+    # They are not useful for estimating momentum persistence.
+    pairs = pairs[
+        pairs["mv_change_1d"].abs()
+        >= min_abs_change
+    ]
+
+    def calculate_factor(subset):
+
+        if len(subset) == 0:
+            return np.nan, 0
+
+        x = subset[
+            "mv_change_1d"
+        ].to_numpy(dtype=float)
+
+        y = subset[
+            "next_mv_change"
+        ].to_numpy(dtype=float)
+
+        denominator = np.dot(x, x)
+
+        if denominator == 0:
+            return np.nan, len(subset)
+
+        # Linear regression through the origin:
+        # next_change = factor * current_change
+        factor = (
+            np.dot(x, y)
+            / denominator
+        )
+
+        return factor, len(subset)
+
+    positive_factor, positive_samples = (
+        calculate_factor(
+            pairs[
+                pairs["mv_change_1d"] > 0
+            ]
+        )
+    )
+
+    negative_factor, negative_samples = (
+        calculate_factor(
+            pairs[
+                pairs["mv_change_1d"] < 0
+            ]
+        )
+    )
+
+    return {
+        "positive_factor":
+            positive_factor,
+        "negative_factor":
+            negative_factor,
+        "positive_samples":
+            positive_samples,
+        "negative_samples":
+            negative_samples
+    }
