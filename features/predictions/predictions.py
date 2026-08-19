@@ -202,18 +202,12 @@ def build_manager_value_forecast(
     """
 
     predictions = player_forecast_df.copy()
-
-    predictions["player_id"] = (
-        predictions["player_id"]
-        .astype(str)
-    )
+    predictions["player_id"] = predictions["player_id"].astype(str)
 
     total_prediction_lookup = dict(
         zip(
             predictions["player_id"],
-            predictions[
-                "predicted_mv_change_until_matchday"
-            ]
+            predictions["predicted_mv_change_until_matchday"]
         )
     )
 
@@ -239,17 +233,9 @@ def build_manager_value_forecast(
     )
 
     budget_df = manager_budgets_df.copy()
+    budget_df["User_Key"] = budget_df["User"].astype(str).str.strip()
 
-    budget_df["User_Key"] = (
-        budget_df["User"]
-        .astype(str)
-        .str.strip()
-    )
-
-    managers = get_managers(
-        token,
-        league_id
-    )
+    managers = get_managers(token, league_id)
 
     results = []
 
@@ -268,14 +254,11 @@ def build_manager_value_forecast(
         predicted_last_update = 0.0
         predicted_total_change = 0.0
         predicted_players = 0
-
-                missing_players = []
+        missing_players = []
 
         for player in squad_players:
 
-            player_id = str(
-                player.get("pi")
-            )
+            player_id = str(player.get("pi"))
 
             if player_id not in total_prediction_lookup:
 
@@ -296,9 +279,7 @@ def build_manager_value_forecast(
             )
 
             if pd.notna(total_change):
-                predicted_total_change += float(
-                    total_change
-                )
+                predicted_total_change += float(total_change)
                 predicted_players += 1
 
             last_change = last_change_lookup.get(
@@ -307,9 +288,7 @@ def build_manager_value_forecast(
             )
 
             if pd.notna(last_change):
-                last_24h_change += float(
-                    last_change
-                )
+                last_24h_change += float(last_change)
 
             next_change = next_update_lookup.get(
                 player_id,
@@ -317,9 +296,7 @@ def build_manager_value_forecast(
             )
 
             if pd.notna(next_change):
-                predicted_next_update += float(
-                    next_change
-                )
+                predicted_next_update += float(next_change)
 
             final_change = last_update_lookup.get(
                 player_id,
@@ -327,9 +304,7 @@ def build_manager_value_forecast(
             )
 
             if pd.notna(final_change):
-                predicted_last_update += float(
-                    final_change
-                )
+                predicted_last_update += float(final_change)
 
         if missing_players:
             print(
@@ -339,35 +314,25 @@ def build_manager_value_forecast(
             for missing_player in missing_players:
                 print(missing_player)
 
-        
-        manager_key = str(
-            manager_name
-        ).strip()
+        manager_key = str(manager_name).strip()
 
         manager_budget_row = budget_df[
-            budget_df["User_Key"]
-            == manager_key
+            budget_df["User_Key"] == manager_key
         ]
 
         if manager_budget_row.empty:
-
             print(
-                f"Warning: No budget information "
-                f"found for {manager_name}"
+                f"Warning: No budget information found for "
+                f"{manager_name}"
             )
-
             continue
 
         current_team_value = float(
-            manager_budget_row.iloc[0][
-                "Team Value"
-            ]
+            manager_budget_row.iloc[0]["Team Value"]
         )
 
         current_budget = float(
-            manager_budget_row.iloc[0][
-                "Budget"
-            ]
+            manager_budget_row.iloc[0]["Budget"]
         )
 
         predicted_team_value = (
@@ -411,7 +376,6 @@ def build_manager_value_forecast(
     result_df = pd.DataFrame(results)
 
     if not result_df.empty:
-
         result_df = result_df.sort_values(
             "Manager Value @ MD",
             ascending=False,
