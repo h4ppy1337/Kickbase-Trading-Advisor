@@ -1,5 +1,6 @@
 from kickbase_api.league import get_league_players_on_market
 from kickbase_api.user import get_players_in_squad
+from kickbase_api.manager import get_managers, get_manager_squad
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import pandas as pd
@@ -105,3 +106,160 @@ def join_current_market(token, league_id, today_df_results):
     bid_df = bid_df[["last_name", "team_name", "mv", "mv_change_yesterday", "predicted_mv_target", "s_11_prob", "hours_to_exp", "expiring_today"]]
 
     return bid_df
+
+
+def live_horizon_predictions(today_df, model, features, horizon_days):
+    """
+    Predict the cumulative market value change for every player
+    until the next matchday.
+    """
+
+    current_df = (
+        today_df
+        .sort_values(["player_id", "date"])
+        .drop_duplicates(subset=["player_id"], keep="last")
+        .copy()
+    )
+
+    # No market value update left before kickoff
+    if horizon_days <= 0:
+        current_df["predicted_mv_change_until_matchday"] = 0.0
+    else:
+        prediction_features = current_df[features]
+
+        current_df["predicted_mv_change_until_matchday"] = np.round(
+            model.predict(prediction_features),
+            2
+        )
+
+    return current_df[
+        [
+            "player_id",
+            "first_name",
+            "last_name",
+            "team_name",
+            "mv",
+            "predicted_mv_change_until_matchday"
+        ]
+    ]
+
+
+def build_manager_value_forecast(
+    token,
+    league_id,
+    manager_budgets_df,
+    player_forecast_df,
+    future_login_bonus
+):
+    """
+    Aggregate player market value predictions for every manager
+    and calculate projected total manager value at next matchday.
+    """
+
+    predictions = player_forecast_df.copy()
+    predictions["player_id"] = predictions["player_id"].astype(str)
+
+    prediction_lookup = dict(
+        zip(
+            predictions["player_id"],
+            predictions["predicted_mv_change_until_matchday"]
+        )
+    )
+
+    # Normalize manager names for matching
+    budget_df = manager_budgets_df.copy()
+    budget_df["User_Key"] = (
+        budget_df["User"].astype(str).str.strip()
+    )
+
+    managers = get_managers(token, league_id)
+
+    results = []
+
+    for manager_name, manager_id in managers:
+
+        squad_data = get_manager_squad(
+            token,
+            league_id,
+            manager_id
+        )
+
+        squad_players = squad_data.get("it", [])
+
+        predicted_change = 0.0
+        predicted_players = 0
+
+        for player in squad_players:
+
+            player_id = str(player.get("pi"))
+
+            if player_id in prediction_lookup:
+                change = prediction_lookup[player_id]
+
+                if pd.notna(change):
+                    predicted_change += float(change)
+                    predicted_players += 1
+
+        manager_key = str(manager_name).strip()
+
+        manager_budget_row = budget_df[
+            budget_df["User_Key"] == manager_key
+        ]
+
+        if manager_budget_row.empty:
+            print(
+                f"Warning: No budget information found for "
+                f"{manager_name}"
+            )
+            continue
+
+        current_team_value = float(
+            manager_budget_row.iloc[0]["Team Value"]
+        )
+
+        current_budget = float(
+            manager_budget_row.iloc[0]["Budget"]
+        )
+
+        predicted_team_value = (
+            current_team_value + predicted_change
+        )
+
+        predicted_budget = (
+            current_budget + future_login_bonus
+        )
+
+        manager_value = (
+            predicted_team_value + predicted_budget
+        )
+
+        squad_size = len(squad_players)
+
+        coverage = (
+            f"{predicted_players}/{squad_size}"
+            if squad_size > 0
+            else "0/0"
+        )
+
+        results.append({
+            "User": manager_name,
+            "Team Value Now": current_team_value,
+            "Predicted MV Change": predicted_change,
+            "Team Value @ MD": predicted_team_value,
+            "Cash Now": current_budget,
+            "Future Login Bonus": future_login_bonus,
+            "Cash @ MD": predicted_budget,
+            "Manager Value @ MD": manager_value,
+            "Prediction Coverage": coverage
+        })
+
+    result_df = pd.DataFrame(results)
+
+    if not result_df.empty:
+        result_df = result_df.sort_values(
+            "Manager Value @ MD",
+            ascending=False,
+            ignore_index=True
+        )
+
+    return result_df
