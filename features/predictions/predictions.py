@@ -268,6 +268,28 @@ def build_manager_value_forecast(
 
         squad_players = squad_data.get("it", [])
 
+        lineup_by_lo = [
+            player
+            for player in squad_players
+            if player.get("lo", 0) > 0
+        ]
+
+        print(
+            f"LINEUP CHECK {manager_name}: "
+            f"{len(lineup_by_lo)}/{len(squad_players)} players with lo > 0"
+        )
+
+        print(
+            [
+                (
+                    player.get("pn"),
+                    player.get("lo"),
+                    player.get("pos")
+                )
+                for player in lineup_by_lo
+            ]
+        )
+
         last_24h_change = 0.0
         predicted_next_update = 0.0
         predicted_last_update = 0.0
