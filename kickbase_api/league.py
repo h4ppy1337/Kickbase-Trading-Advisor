@@ -95,3 +95,10 @@ def get_league_ranking(token, league_id):
     ranked = sorted(players, key=lambda x: x[1], reverse=True)
 
     return ranked
+
+def get_competition_matchdays(token, competition_id):
+    """Get all matchdays of a competition."""
+    url = f"{BASE_URL}/competitions/{competition_id}/matchdays"
+    data = get_json_with_token(url, token)
+
+    return data
