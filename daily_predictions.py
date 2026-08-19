@@ -7,7 +7,8 @@ from features.predictions.predictions import (
 )
 from features.predictions.preprocessing import (
     preprocess_player_data,
-    split_data
+    split_data,
+    estimate_market_momentum_decay
 )
 from features.predictions.modeling import train_model, evaluate_model
 from kickbase_api.league import get_league_id, get_next_matchday_info
@@ -161,6 +162,52 @@ print("\nData loaded from database.")
 
 # Preprocess the data and spit the data
 proc_player_df, today_df = preprocess_player_data(player_df)
+
+# Estimate historical market value momentum persistence
+decay_stats = estimate_market_momentum_decay(
+    proc_player_df
+)
+
+positive_decay = (
+    decay_stats["positive_factor"]
+)
+
+negative_decay = (
+    decay_stats["negative_factor"]
+)
+
+
+print(
+    "\n=== EMPIRICAL MOMENTUM DECAY ==="
+)
+
+print(
+    f"Positive trend factor: "
+    f"{positive_decay:.4f} "
+    f"({decay_stats['positive_samples']} samples)"
+)
+
+print(
+    f"Negative trend factor: "
+    f"{negative_decay:.4f} "
+    f"({decay_stats['negative_samples']} samples)"
+)
+
+
+if pd.notna(positive_decay):
+    print(
+        f"Positive trend retained after "
+        f"8 additional updates: "
+        f"{positive_decay ** 8 * 100:.1f}%"
+    )
+
+if pd.notna(negative_decay):
+    print(
+        f"Negative trend retained after "
+        f"8 additional updates: "
+        f"{negative_decay ** 8 * 100:.1f}%"
+    )
+
 X_train, X_test, y_train, y_test = split_data(proc_player_df, features, target)
 print("\nData preprocessed.")
 
