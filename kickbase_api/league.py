@@ -1,4 +1,6 @@
 from kickbase_api.config import BASE_URL, get_json_with_token
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # All functions related to league data
 
@@ -102,3 +104,46 @@ def get_competition_matchdays(token, competition_id):
     data = get_json_with_token(url, token)
 
     return data
+
+def get_next_matchday_info(token, competition_id):
+    """Get the next matchday whose first match has not started yet."""
+    data = get_competition_matchdays(token, competition_id)
+
+    berlin_tz = ZoneInfo("Europe/Berlin")
+    now = datetime.now(berlin_tz)
+
+    upcoming_matchdays = []
+
+    for matchday in data.get("it", []):
+        match_starts = []
+
+        for match in matchday.get("it", []):
+            raw_datetime = match.get("dt")
+
+            if not raw_datetime:
+                continue
+
+            match_start = datetime.fromisoformat(
+                raw_datetime.replace("Z", "+00:00")
+            ).astimezone(berlin_tz)
+
+            match_starts.append(match_start)
+
+        if not match_starts:
+            continue
+
+        matchday_start = min(match_starts)
+
+        if matchday_start > now:
+            upcoming_matchdays.append({
+                "day": matchday.get("day"),
+                "start": matchday_start
+            })
+
+    if not upcoming_matchdays:
+        return None
+
+    return min(
+        upcoming_matchdays,
+        key=lambda item: item["start"]
+    )
