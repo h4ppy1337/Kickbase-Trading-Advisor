@@ -51,9 +51,8 @@ def get_achievement_reward(token, league_id, achievement_id):
 
     url = f"{BASE_URL}/leagues/{league_id}/user/achievements/{achievement_id}"
     data = get_json_with_token(url, token)
-    print(f"Achievement response for {achievement_id}: {data}")
 
-    amount = data["ac"]
-    reward = data["er"]
-
+    amount = data.get("ac", 0)
+    reward = data.get("er", 0)
+    
     return amount, reward
