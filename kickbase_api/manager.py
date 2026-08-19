@@ -43,3 +43,10 @@ def get_manager_performance(token, league_id, manager_id, manager_name):
         "name": manager_name,
         "tp": tp_value
     }
+
+def get_manager_squad(token, league_id, manager_id):
+    """Get the current squad of a manager."""
+    url = f"{BASE_URL}/leagues/{league_id}/managers/{manager_id}/squad"
+    data = get_json_with_token(url, token)
+
+    return data
