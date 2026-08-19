@@ -310,14 +310,16 @@ def estimate_market_momentum_decay(
 def estimate_regime_horizon_decay(
     df,
     horizon_days,
-    min_change=100_000
+    min_change=100_000,
+    min_next_change=50_000
 ):
     """
     Estimate multi-day market value persistence for historical
-    situations similar to the current pre-matchday momentum phase.
+    situations similar to the current momentum phase.
 
-    Instead of extrapolating a one-day factor repeatedly, this
-    measures the actual cumulative change over the entire horizon.
+    The cumulative future change is measured relative to the
+    ACTUAL next market value update. This matches the live forecast,
+    which starts with the ML prediction for the next update.
     """
 
     if horizon_days <= 1:
@@ -339,7 +341,41 @@ def estimate_regime_horizon_decay(
         )
     )
 
-    # Exact market value horizon_days later
+    # ---------------------------------
+    # Get actual market value next day
+    # ---------------------------------
+
+    next_values = data[
+        ["player_id", "date", "mv"]
+    ].copy()
+
+    next_values = next_values.rename(
+        columns={
+            "date": "next_date",
+            "mv": "next_mv"
+        }
+    )
+
+    data["next_date"] = (
+        data["date"]
+        + pd.Timedelta(days=1)
+    )
+
+    data = data.merge(
+        next_values,
+        on=["player_id", "next_date"],
+        how="left"
+    )
+
+    data["actual_next_change"] = (
+        data["next_mv"]
+        - data["mv"]
+    )
+
+    # ---------------------------------
+    # Get market value at full horizon
+    # ---------------------------------
+
     future_values = data[
         ["player_id", "date", "mv"]
     ].copy()
@@ -375,6 +411,7 @@ def estimate_regime_horizon_decay(
         "mv_change_3d",
         "mv_trend_7d",
         "days_to_next",
+        "actual_next_change",
         "cumulative_future_change"
     ]
 
@@ -382,18 +419,18 @@ def estimate_regime_horizon_decay(
         subset=required_columns
     )
 
-    # We want historical situations reasonably similar
-    # to the current long pre-matchday window.
     min_days_to_match = max(
         7,
         horizon_days - 2
     )
 
+    # ---------------------------------
+    # Convert cumulative multiplier
+    # into equivalent geometric decay
+    # ---------------------------------
+
     def implied_decay(multiplier):
 
-        # A normal geometric decay with phi between
-        # 0 and 1 has a cumulative multiplier
-        # between 1 and horizon_days.
         if (
             pd.isna(multiplier)
             or multiplier <= 1
@@ -412,15 +449,11 @@ def estimate_regime_horizon_decay(
                 low + high
             ) / 2
 
-            if phi == 1:
-                geometric_sum = horizon_days
-
-            else:
-                geometric_sum = (
-                    1 - phi ** horizon_days
-                ) / (
-                    1 - phi
-                )
+            geometric_sum = (
+                1 - phi ** horizon_days
+            ) / (
+                1 - phi
+            )
 
             if geometric_sum < multiplier:
                 low = phi
@@ -431,9 +464,32 @@ def estimate_regime_horizon_decay(
             low + high
         ) / 2
 
-    def summarize(subset):
+    # ---------------------------------
+    # Summarize one market regime
+    # ---------------------------------
+
+    def summarize(
+        subset,
+        expected_sign
+    ):
 
         subset = subset.copy()
+
+        # We condition on the next update
+        # continuing in the predicted direction.
+        if expected_sign == "positive":
+
+            subset = subset[
+                subset["actual_next_change"]
+                >= min_next_change
+            ]
+
+        else:
+
+            subset = subset[
+                subset["actual_next_change"]
+                <= -min_next_change
+            ]
 
         if subset.empty:
             return {
@@ -442,15 +498,16 @@ def estimate_regime_horizon_decay(
                 "implied_decay": np.nan
             }
 
-        # Relative cumulative development compared with
-        # the known current 24h change.
+        # This now matches our live formula:
+        #
+        # predicted next update
+        # x cumulative multiplier
+        # = total change until matchday
         subset["horizon_multiplier"] = (
             subset["cumulative_future_change"]
-            / subset["mv_change_1d"]
+            / subset["actual_next_change"]
         )
 
-        # Median is deliberately used because individual
-        # market value paths can contain extreme reversals.
         multiplier = (
             subset["horizon_multiplier"]
             .median()
@@ -464,9 +521,10 @@ def estimate_regime_horizon_decay(
             )
         }
 
-    # Positive momentum:
-    # rising today, rising across 3 days and 7 days,
-    # and relatively far away from the next match.
+    # ---------------------------------
+    # Positive momentum
+    # ---------------------------------
+
     positive_persistent = data[
         (data["mv_change_1d"] >= min_change)
         & (data["mv_change_3d"] > 0)
@@ -477,8 +535,6 @@ def estimate_regime_horizon_decay(
         )
     ]
 
-    # Stronger definition:
-    # not just positive, but a substantial multi-day streak.
     positive_strong = data[
         (data["mv_change_1d"] >= 150_000)
         & (
@@ -491,6 +547,10 @@ def estimate_regime_horizon_decay(
             >= min_days_to_match
         )
     ]
+
+    # ---------------------------------
+    # Negative momentum
+    # ---------------------------------
 
     negative_persistent = data[
         (data["mv_change_1d"] <= -min_change)
@@ -517,14 +577,26 @@ def estimate_regime_horizon_decay(
 
     return {
         "positive_persistent":
-            summarize(positive_persistent),
+            summarize(
+                positive_persistent,
+                "positive"
+            ),
 
         "positive_strong":
-            summarize(positive_strong),
+            summarize(
+                positive_strong,
+                "positive"
+            ),
 
         "negative_persistent":
-            summarize(negative_persistent),
+            summarize(
+                negative_persistent,
+                "negative"
+            ),
 
         "negative_strong":
-            summarize(negative_strong)
+            summarize(
+                negative_strong,
+                "negative"
+            )
     }
